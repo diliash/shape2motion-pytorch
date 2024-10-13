@@ -75,6 +75,15 @@ def main(cfg: DictConfig):
             stage3_network.train()
         stage3_network.inference()
     
+    """Inference"""
+    """input_cfg = OmegaConf.create()
+    prev_stage_dir = os.path.dirname("path/to/network/stage2/date")
+    folder, _ = utils.get_latest_file_with_datetime(prev_stage_dir, '', subdir="inference", ext='.h5')
+    input_dir = os.path.join(prev_stage_dir, folder, "inference")
+    input_cfg.train = os.path.join(input_dir, 'train_' + "inference_result.h5")
+    input_cfg.val = os.path.join(input_dir, 'val_' + "inference_result.h5")
+    input_cfg.prev_stage_dir = prev_stage_dir
+    stage3_network = Network(cfg.network.stage3, stage3_input_cfg)"""
 
     if cfg.postprocess.run:
         log.info(f'Postprocess start')
