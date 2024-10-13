@@ -1,24 +1,22 @@
-import os
 import logging
-import pandas as pd
-import numpy as np
-from numpy import linalg as LA
-from scipy.spatial.transform import Rotation as R
-import h5py
+import os
 from enum import Enum
 from multiprocessing import Pool, cpu_count
+from time import time
 from types import SimpleNamespace
 
+import h5py
+import hydra
+import numpy as np
+import pandas as pd
+from hydra.utils import get_original_cwd
 from network import utils
+from numpy import linalg as LA
+from omegaconf import DictConfig, OmegaConf
+from scipy.spatial.transform import Rotation as R
 from tools.utils import io
 from tools.utils.constant import JointType
 from tools.visualizations import Visualizer
-
-from time import time
-
-import hydra
-from hydra.utils import get_original_cwd
-from omegaconf import DictConfig, OmegaConf
 
 log = logging.getLogger('evaluate')
 
@@ -552,6 +550,14 @@ class Evaluation:
 def main(cfg: DictConfig):
     OmegaConf.update(cfg, "paths.result_dir", io.to_abs_path(cfg.paths.result_dir, get_original_cwd()))
     nms_output_cfg = get_latest_nms_output_cfg(cfg.paths.postprocess)
+    print("\n!!!!!!\n Specify the paths manually for inference in evaluate.py main() \n!!!!!!\n")
+    """
+    nms_output_cfg = OmegaConf.create()
+    nms_output_cfg.train = "/path/to/nms/inference/val_nms_result.h5"
+    nms_output_cfg.val = "/path/to/nms/inference/val_nms_result.h5"
+    nms_output_cfg.test = "/path/to/nms/inference/val_nms_result.h5"
+    nms_output_cfg.nms_dir = "/path/to/nms/inference
+    """"
     io.ensure_dir_exists(cfg.output_dir)
 
     evaluator = Evaluation(cfg)

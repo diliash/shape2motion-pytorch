@@ -7,6 +7,7 @@ from network.model import loss
 from tools.utils.constant import Stage
 
 from time import time
+import wandb
 
 
 class Shape2Motion(nn.Module):
@@ -346,6 +347,7 @@ class Shape2Motion(nn.Module):
                 'joint_direction_cat_accuracy': joint_direction_cat_accuracy,
                 'joint_type_accuracy': joint_type_accuracy,
             }
+            wandb.log(loss_dict)
         elif self.stage == Stage.stage2:
             anchor_mask = gt['anchor_mask'].float()
             gt_motion_scores = torch.unsqueeze(gt['motion_scores'], -1)
@@ -361,6 +363,7 @@ class Shape2Motion(nn.Module):
             loss_dict = {
                 'motion_scores_loss': motion_scores_loss,
             }
+            wandb.log(loss_dict)
         elif self.stage == Stage.stage3:
             part_proposal_loss, part_proposal_accuracy, iou = loss.compute_part_proposal_loss(
                 pred['part_proposal'],
@@ -378,5 +381,6 @@ class Shape2Motion(nn.Module):
                 'iou': iou,
                 'motion_regression_loss': motion_regression_loss
             }
+            wandb.log(loss_dict)
 
         return loss_dict

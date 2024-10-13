@@ -1,14 +1,15 @@
-from cmath import pi
 import logging
+import os
+from cmath import pi
+from types import SimpleNamespace
+
 import h5py
 import numpy as np
-from types import SimpleNamespace
 from numpy import linalg as LA
-from tqdm import tqdm
-
-from tools.visualizations import Visualizer
 from tools.utils import io
 from tools.utils.constant import JointType
+from tools.visualizations import Visualizer
+from tqdm import tqdm
 
 log = logging.getLogger('post_nms')
 
@@ -22,35 +23,36 @@ class NMS:
 
     def process(self, output, data_set):
         if data_set == 'train':
-            assert io.is_non_zero_file(self.stage1.train), OSError(f'Cannot find file {self.stage1.train}')
+            #assert io.is_non_zero_file(self.stage1.train), OSError(f'Cannot find file {self.stage1.train}')
             stage1_output = h5py.File(self.stage1.train, 'r')
 
-            assert io.is_non_zero_file(self.stage2.train), OSError(f'Cannot find file {self.stage2.train}')
+            #assert io.is_non_zero_file(self.stage2.train), OSError(f'Cannot find file {self.stage2.train}')
             stage2_output = h5py.File(self.stage2.train, 'r')
 
-            assert io.is_non_zero_file(self.stage3.train), OSError(f'Cannot find file {self.stage3.train}')
+            #assert io.is_non_zero_file(self.stage3.train), OSError(f'Cannot find file {self.stage3.train}')
             stage3_output = h5py.File(self.stage3.train, 'r')
         elif data_set == 'val':
-            assert io.is_non_zero_file(self.stage1.val), OSError(f'Cannot find file {self.stage1.val}')
+            #assert io.is_non_zero_file(self.stage1.val), OSError(f'Cannot find file {self.stage1.val}')
             stage1_output = h5py.File(self.stage1.val, 'r')
 
-            assert io.is_non_zero_file(self.stage2.val), OSError(f'Cannot find file {self.stage2.val}')
+            #assert io.is_non_zero_file(self.stage2.val), OSError(f'Cannot find file {self.stage2.val}')
             stage2_output = h5py.File(self.stage2.val, 'r')
 
-            assert io.is_non_zero_file(self.stage3.val), OSError(f'Cannot find file {self.stage3.val}')
+            #assert io.is_non_zero_file(self.stage3.val), OSError(f'Cannot find file {self.stage3.val}')
             stage3_output = h5py.File(self.stage3.val, 'r')
         elif data_set == 'test':
-            assert io.is_non_zero_file(self.stage1.test), OSError(f'Cannot find file {self.stage1.test}')
+            #assert io.is_non_zero_file(self.stage1.test), OSError(f'Cannot find file {self.stage1.test}')
             stage1_output = h5py.File(self.stage1.test, 'r')
 
-            assert io.is_non_zero_file(self.stage2.test), OSError(f'Cannot find file {self.stage2.test}')
+            #assert io.is_non_zero_file(self.stage2.test), OSError(f'Cannot find file {self.stage2.test}')
             stage2_output = h5py.File(self.stage2.test, 'r')
 
-            assert io.is_non_zero_file(self.stage3.test), OSError(f'Cannot find file {self.stage3.test}')
+            #assert io.is_non_zero_file(self.stage3.test), OSError(f'Cannot find file {self.stage3.test}')
             stage3_output = h5py.File(self.stage3.test, 'r')
         self.process_data(output, stage1_output, stage2_output, stage3_output)
 
     def process_data(self, output, stage1_output, stage2_output, stage3_output):
+        os.makedirs(os.path.dirname(output))
         output_h5 = h5py.File(output, 'w')
         # get predictions for one object
         object2instance_names = {}
@@ -108,8 +110,7 @@ class NMS:
                 tmp_pred_motion_scores = tmp_pred_motion_scores[tmp_pred_motion_mask]
                 tmp_pred_motions = pred_motions[pred_anchor_mask, :][tmp_pred_motion_mask, :]
                 tmp_pred_motions_directions = tmp_pred_motions[:, 3:6]
-                tmp_pred_motions_directions = tmp_pred_motions_directions / LA.norm(tmp_pred_motions_directions,
-                                                                                    axis=1).reshape(-1, 1)
+                tmp_pred_motions_directions = tmp_pred_motions_directions / LA.norm(tmp_pred_motions_directions, axis=1).reshape(-1, 1)
                 tmp_pred_motions_types = tmp_pred_motions[:, 6]
 
                 if len(tmp_pred_motion_scores) == 0:
@@ -121,6 +122,7 @@ class NMS:
                 selected_joints.append(tmp_pred_motion_mask[joint_pick])
 
             pred_part_proposal_all = np.zeros(input_xyz.shape[0])
+            pred_part_score_all = np.zeros(len(part_pick) + 1, dtype=np.float32)
             pred_joints_all = None
             pred_scores_all = None
             pred_joints_map = None
@@ -133,8 +135,10 @@ class NMS:
                 stage3_instance = stage3_output[instance_name]
                 # pred_part_proposal = stage1_output[object_name]['pred_part_proposals'][:][int(instance_name.split('_')[-1]), :].astype(bool)
                 pred_part_proposal = stage3_instance['part_proposal'][:].astype(bool)
+                confidence = scores[pick_idx]
                 motion_regression = stage3_instance['motion_regression'][:]
                 pred_part_proposal_all[pred_part_proposal] = i + 1
+                pred_part_score_all[i + 1] = confidence
 
                 pred_joints_idx = selected_joints[i]
                 num_joints_per_part = len(pred_joints_idx)
@@ -162,6 +166,8 @@ class NMS:
             h5instance = output_h5.require_group(object_name)
             h5instance.create_dataset('pred_part_proposal', shape=pred_part_proposal_all.shape,
                                       data=pred_part_proposal_all, compression='gzip')
+            h5instance.create_dataset('pred_part_proposal_scores', shape=pred_part_score_all.shape,
+                                      data=pred_part_score_all, compression='gzip')
             h5instance.create_dataset('pred_joints', shape=pred_joints_all.shape, data=pred_joints_all,
                                       compression='gzip')
             h5instance.create_dataset('pred_scores', shape=pred_scores_all.shape, data=pred_scores_all,

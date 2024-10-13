@@ -1,29 +1,31 @@
-import os
-import h5py
 import logging
-import numpy as np
+import os
 from time import time
-from tqdm import tqdm
 
+import h5py
+import numpy as np
 import torch
 import torch.optim as optim
-from torch.optim import optimizer
-from torch.utils.tensorboard import SummaryWriter
-
-from network.model import Shape2Motion
-from network.data import Shape2MotionDataset
+import wandb
 from network import utils
+from network.data import Shape2MotionDataset
+from network.model import Shape2Motion
 from network.utils import AvgRecorder
+from omegaconf import OmegaConf
+from postprocess import PostStage1, PostStage2, PostStage3
 from tools.utils import io
 from tools.utils.constant import Stage
-
-from postprocess import PostStage1, PostStage2, PostStage3
+from torch.optim import optimizer
+from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
 
 
 class Shape2MotionTrainer:
     def __init__(self, cfg, data_path, stage):
         self.cfg = cfg
         self.log = logging.getLogger('Network')
+        wandb.login()
+        self.run = wandb.init(project="Shape2Motion", config=OmegaConf.to_container(cfg, resolve=True))
         # data_path is a dictionary {'train', 'test'}
         if cfg.device == 'cuda:0' and torch.cuda.is_available():
             device = torch.device('cuda:0')
@@ -112,6 +114,7 @@ class Shape2MotionTrainer:
         }
 
         for i, (input_pts, gt_dict, id) in enumerate(tqdm(self.train_loader, mininterval=5.0)):
+            
             io_time.update(time() - end_time)
             # Move the tensors to the device
             s_time = time()
@@ -121,10 +124,12 @@ class Shape2MotionTrainer:
                 gt[k] = v.to(self.device)
             to_gpu_time.update(time() - s_time)
 
+
             # Get the loss
             s_time = time()
             pred = self.model(input_pts, gt)
             loss_dict = self.model.losses(pred, gt)
+            #print(id, loss_dict)
             network_time.update(time() - s_time)
 
             loss = torch.tensor(0.0, device=self.device)
@@ -135,7 +140,7 @@ class Shape2MotionTrainer:
                     if k not in loss_weight:
                         raise ValueError(f'No loss weight for {k}')
                     loss += loss_weight[k] * v
-
+            print(loss_dict)
             # Used to calculate the avg loss
             for k, v in loss_dict.items():
                 if k not in epoch_loss.keys():
@@ -145,6 +150,7 @@ class Shape2MotionTrainer:
 
             self.optimizer.zero_grad()
             loss.backward()
+            #torch.nn.utils.clip_grad_norm_(self.model.parameters(), 0.1, norm_type=2)
             self.optimizer.step()
 
             # time and print
@@ -165,6 +171,7 @@ class Shape2MotionTrainer:
         # Add the loss values into the tensorboard
         for k, v in epoch_loss.items():
             if k == 'total_loss':
+                wandb.log({"total_loss":  epoch_loss[k].avg})
                 self.writer.add_scalar(f'{k}', epoch_loss[k].avg, epoch)
             elif 'loss' in k:
                 self.writer.add_scalar(f'loss/{k}', epoch_loss[k].avg, epoch)
@@ -293,7 +300,6 @@ class Shape2MotionTrainer:
 
     def test(self, inference_model=None):
         self.init_data_loader(True)
-
         if not inference_model or not io.file_exist(inference_model):
             self.log.info(f'Loading from the most recently saved model')
             inference_model = self.get_latest_model_path(with_best=self.cfg.test.with_best)
@@ -321,9 +327,17 @@ class Shape2MotionTrainer:
         for data_set in              data_sets:
             if data_set == 'train':
                 output_path = os.path.join(self.test_cfg.output_dir, f'{data_set}_' + self.test_cfg.inference_result)
+                print("\n!!!!!!\n Specify the output paths manually during inference\n!!!!!!\n")
+                """
+                output_path = f"path/to/current_inference/{self.cfg.name}/inference/{data_set}_{self.test_cfg.inference_result}"
+                """
             else:
                 output_path = os.path.join(self.test_cfg.output_dir,
                                            f'{self.cfg.test.split}_' + self.test_cfg.inference_result)
+                print("\n!!!!!!\n Specify the output paths manually during inference\n!!!!!!\n")
+                """
+                output_path = f"path/to/current_inference/{self.cfg.name}/inference/{self.cfg.test.split}_{self.test_cfg.inference_result}"
+                """
             self.postprocess.set_datapath(self.data_path[data_set], output_path, data_set)
             self.eval_epoch(epoch, save_results=True, data_set=data_set)
             self.postprocess.stop()

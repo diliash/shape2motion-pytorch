@@ -1,17 +1,14 @@
-import os
 import logging
+import os
 from time import time
 
 import hydra
 from hydra.utils import get_original_cwd
+from network import Network, utils
 from omegaconf import DictConfig, OmegaConf, open_dict
-
-from tools.utils import io
-from network import Network
-from network import utils
-
-from preprocess import PreProcess
 from postprocess import NMS
+from preprocess import PreProcess
+from tools.utils import io
 
 log = logging.getLogger('pipeline')
 
@@ -54,6 +51,12 @@ def main(cfg: DictConfig):
 
     if cfg.network.stage2.run:
         stage2_input_cfg = get_latest_input_cfg(cfg.paths.network.stage1)
+        """
+        stage2_input_cfg.train = f"path/to/current_inference/stage1/inference/train_inference_result.h5"
+        stage2_input_cfg.val = f"path/to/current_inference/stage1/inference/val_inference_result.h5"
+        stage2_input_cfg.test = f"path/to/current_inference/stage1/inference/val_inference_result.h5"
+        stage2_input_cfg.prev_stage_dir = f"path/to/current_inference/stage1"
+        """
 
         stage2_network = Network(cfg.network.stage2, stage2_input_cfg)
         if not cfg.network.stage2.eval_only:
@@ -62,29 +65,57 @@ def main(cfg: DictConfig):
 
     if cfg.network.stage3.run:
         stage3_input_cfg = get_latest_input_cfg(cfg.paths.network.stage2)
+        """stage3_input_cfg.train = f"path/to/current_inference/stage2/inference/train_inference_result.h5"
+        stage3_input_cfg.val = f"path/to/current_inference/stage2/inference/val_inference_result.h5"
+        stage3_input_cfg.test = f"path/to/current_inference/stage2/inference/val_inference_result.h5"
+        stage3_input_cfg.prev_stage_dir = f"path/to/shape2motion-pytorch/current_inference/stage2""""
 
         stage3_network = Network(cfg.network.stage3, stage3_input_cfg)
         if not cfg.network.stage3.eval_only:
             stage3_network.train()
         stage3_network.inference()
+    
 
     if cfg.postprocess.run:
         log.info(f'Postprocess start')
         start = time()
         stage1_output_cfg = get_latest_input_cfg(cfg.paths.network.stage1)
+
+        os.makedirs(f"path/to/current_inference/stage1/inference", exist_ok=True)
+        stage1_output_cfg.train = f"path/to/current_inference/stage1/inference/train_inference_result.h5"
+        stage1_output_cfg.val = f"path/to/current_inference/stage1/inference/val_inference_result.h5"
+        stage1_output_cfg.test = f"path/to/current_inference/stage1/inference/val_inference_result.h5"
+        stage1_output_cfg.prev_stage_dir = f"path/to/current_inference/stage1"
+
+        os.makedirs(f"path/to/current_inference/stage2/inference", exist_ok=True)
         stage2_output_cfg = get_latest_input_cfg(cfg.paths.network.stage2)
+        stage2_output_cfg.train = f"path/to/current_inference/stage2/inference/train_inference_result.h5"
+        stage2_output_cfg.val = f"path/to/current_inference/stage2/inference/val_inference_result.h5"
+        stage2_output_cfg.test = f"path/to/current_inference/stage2/inference/val_inference_result.h5"
+        stage2_output_cfg.prev_stage_dir = f"path/to/current_inference/stage2"
+        
+        os.makedirs(f"path/to/current_inference/stage3/inference", exist_ok=True)
         stage3_output_cfg = get_latest_input_cfg(cfg.paths.network.stage3)
+        stage3_output_cfg = get_latest_input_cfg(cfg.paths.network.stage2)
+        stage3_output_cfg.train = f"path/to/current_inference/stage3/inference/train_inference_result.h5"
+        stage3_output_cfg.val = f"path/to/current_inference/stage3/inference/val_inference_result.h5"
+        stage3_output_cfg.test = f"path/to/current_inference/stage3/inference/val_inference_result.h5"
+        stage3_output_cfg.prev_stage_dir = f"path/to/current_inference/stage3"
+
         nms_cfg = cfg.postprocess.nms
+
         with open_dict(nms_cfg):
             nms_cfg.stage1 = stage1_output_cfg
             nms_cfg.stage2 = stage2_output_cfg
             nms_cfg.stage3 = stage3_output_cfg
         io.ensure_dir_exists(cfg.paths.postprocess.path)
         nms = NMS(nms_cfg)
-        data_sets = ['train', cfg.network.test_split]
-        # data_sets = [cfg.network.test_split]
+        # data_sets = ['train', cfg.network.test_split]
+        data_sets = [cfg.network.test_split]
         for data_set in data_sets:
             output_path = os.path.join(cfg.paths.postprocess.path, f'{data_set}_' + cfg.paths.postprocess.output.nms_result)
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            output_path = f"path/to/current_inference/nms/inference/{data_set}_nms_result.h5"
             nms.process(output_path, data_set)
         end = time()
 

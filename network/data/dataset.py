@@ -85,7 +85,10 @@ class Shape2MotionDataset(Dataset):
 
                 if self.stage == Stage.stage1:
                     gt_dict['joint_origin_reg'] = torch.matmul(gt_dict['joint_origin_reg'], m)
-                    input_pts[:, 6:9] = torch.matmul(input_pts[:, 6:9], inv_trans_m)
+                    if self.has_normal and self.has_color:
+                        input_pts[:, 6:9] = torch.matmul(input_pts[:, 6:9], inv_trans_m)
+                    elif self.has_normal:
+                        input_pts[:, 3:6] = torch.matmul(input_pts[:, 3:6], inv_trans_m)
                 else:
                     gt_dict['motion_regression'][:3] = torch.matmul(gt_dict['motion_regression'][:3], m)
                     gt_dict['moved_pcds'][:, :, :3] = torch.matmul(gt_dict['moved_pcds'][:, :, :3], m)
@@ -125,12 +128,12 @@ class Shape2MotionDataset(Dataset):
                     color_rand = torch.randn(3) * 0.05
                     input_pts[:, 3:6] += color_rand
         
-        if self.stage == Stage.stage1:
+        """if self.stage == Stage.stage1:
             if not self.has_normal and not self.has_color:
                 input_pts = input_pts[:, :3]
             elif not self.has_normal:
                 input_pts = torch.cat((input_pts[:, :3], input_pts[:, 3:6]), -1)
             elif not self.has_color:
-                input_pts = torch.cat((input_pts[:, :3], input_pts[:, 6:9]), -1)
+                input_pts = torch.cat((input_pts[:, :3], input_pts[:, 6:9]), -1)"""
 
         return input_pts, gt_dict, instance_name

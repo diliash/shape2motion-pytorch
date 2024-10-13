@@ -1,11 +1,10 @@
-import os
-import h5py
 import logging
-import torch
+import os
 
+import h5py
+import torch
 from network import utils
 from network.engine import Shape2MotionTrainer
-
 from tools.utils import io
 from tools.utils.constant import Stage
 
@@ -25,7 +24,9 @@ class Network:
 
         train_path = cfg.train.input_data if io.file_exist(cfg.train.input_data) else input_cfg.train
         test_path = input_cfg.val if cfg.test.split == 'val' else input_cfg.test
+
         test_path = cfg.test.input_data if io.file_exist(cfg.test.input_data) else test_path
+
         self.data_path = {"train": train_path, "test": test_path}
         self.trainer = Shape2MotionTrainer(
             cfg=self.cfg,

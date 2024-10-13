@@ -15,6 +15,8 @@ from tools.visualizations import Visualizer
 class DatasetName(Enum):
     SHAPE2MOTION = 1
     MULTISCAN = 2
+    PARTNETSIM = 3
+    PARTNETSIMV3 = 4
 
 
 class Mat2Hdf5Impl:

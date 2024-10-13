@@ -1,19 +1,19 @@
-import os
+import json
 import logging
-import torch
+import os
+from multiprocessing import cpu_count
+
 import h5py
-import pandas as pd
 import numpy as np
-from tqdm import tqdm
-from dgl.geometry import farthest_point_sampler
+import pandas as pd
+import torch
 from dgl import backend as F
-
+from dgl.geometry import farthest_point_sampler
 from omegaconf import OmegaConf
-
+from preprocess.utils import DatasetName, Mat2Hdf5
 from tools.utils import io
 from tools.visualizations import Visualizer
-from preprocess.utils import Mat2Hdf5, DatasetName
-from multiprocessing import cpu_count
+from tqdm import tqdm
 
 log = logging.getLogger('preprocess')
 
@@ -123,6 +123,20 @@ class PreProcess:
 
             self.process_multiscan_data(os.path.join(self.dataset_dir, self.input_cfg.test_set),
                                         os.path.join(self.output_cfg.path, self.output_cfg.test_data), self.split.test.num_instances)
+        elif DatasetName[dataset_name] == DatasetName.PARTNETSIM:
+            self.process_partnetsim_data(os.path.join(self.dataset_dir, self.input_cfg.train_set),
+                                        os.path.join(self.output_cfg.path, self.output_cfg.train_data), self.split.train.num_instances)
+
+            self.process_partnetsim_data(os.path.join(self.dataset_dir, self.input_cfg.val_set),
+                                        os.path.join(self.output_cfg.path, self.output_cfg.val_data), self.split.val.num_instances)
+        elif DatasetName[dataset_name] == DatasetName.PARTNETSIMV3:
+            self.process_partnetsim_v3_data(os.path.join(self.dataset_dir, self.input_cfg.train_set),
+                                            os.path.join(self.output_cfg.path, self.output_cfg.train_data), self.split.train.num_instances)
+
+            self.process_partnetsim_v3_data(os.path.join(self.dataset_dir, self.input_cfg.val_set),
+                                        os.path.join(self.output_cfg.path, self.output_cfg.val_data), self.split.val.num_instances)
+
+
 
     def process_multiscan_data(self, input_file_path, output_file_path, num_instances=-1):
         num_points = self.cfg.num_points
@@ -236,3 +250,290 @@ class PreProcess:
             if num_instances > 0 and count == num_instances:
                 break
         h5output.close()
+
+    def process_partnetsim_data(self, input_file_path, output_file_path, num_instances=-1):
+        num_points = self.cfg.num_points
+
+        h5file = h5py.File(input_file_path, 'r')
+        h5output = h5py.File(output_file_path, 'w')
+        count = 0
+
+        model_data_path = "".join(input_file_path.split(".")[:-1]) + ".json"
+
+        with open(model_data_path, "r") as f:
+            model_data = json.load(f)
+
+        points = h5file["points"]
+        instance_ids = h5file["instance_ids"]
+        colors = h5file["colors"]
+        normals = h5file["normals"]
+        downsample_model_ids = h5file["model_ids"]
+        semantic_ids = h5file["semantic_ids"]
+
+        num_models = downsample_model_ids.shape[0]
+        model_idx_map = {}
+        model_idx_map_rev = {}
+        for i in range(num_models):
+            model_idx_map[downsample_model_ids[i].decode("utf-8")] = i
+            model_idx_map_rev[i] = downsample_model_ids[i].decode("utf-8")
+        
+
+        for i in tqdm(range(num_models)):
+            key = model_idx_map_rev[i]
+            if key not in []:
+                cur_points = points[i]
+                part_instance_masks = instance_ids[i]
+
+                #alpha = np.ones(cur_points.shape[0])
+                cur_colors = colors[i]
+                cur_normals = normals[i]
+                part_semantic_masks = semantic_ids[i]
+
+                gt_data = model_data[key]
+
+                num_parts = len(gt_data["part_idx_map_rev"].keys()) - 1
+                #pts = np.column_stack((cur_points, cur_colors, cur_normals))
+                pts = np.column_stack((cur_points, cur_normals))
+                joint_types = np.zeros([num_parts], dtype=int)
+                joint_origins = np.zeros([num_parts, 3], dtype=float)
+                joint_axes = np.zeros([num_parts, 3], dtype=float)
+
+                no_base_gen = ((key, value) for key, value in gt_data["gt_info"].items() if "base" not in key)
+
+                for i, (part_name, part_info) in enumerate(no_base_gen):
+                    joint_types[i] = 0 if part_info["motionType"] == "revolute" else 1
+                    joint_origins[i] = part_info["motionOrigin"]
+                    joint_axes[i] = part_info["motionAxis"]
+                joint_axes = joint_axes / np.linalg.norm(joint_axes, axis=1).reshape(-1, 1)
+
+                fps_sample = False
+                if pts.shape[0] == num_points:
+                    input_pts = pts
+                else:
+                    fps_sample = True
+                    pcd = torch.from_numpy(pts.reshape((1, pts.shape[0], pts.shape[1])))
+                    point_idx = fps(pcd, num_points)[0].cpu().numpy()
+                    input_pts = pts[point_idx, :]
+                    part_semantic_masks = part_semantic_masks[point_idx]
+                    part_instance_masks = part_instance_masks[point_idx]
+
+
+                assert num_parts == np.unique(part_instance_masks).shape[0] - 1
+
+                anchor_pts = np.zeros(num_points)
+                joint_direction_cat = np.zeros(num_points)
+                joint_direction_reg = np.zeros((num_points, 3))
+                joint_origin_reg = np.zeros((num_points, 3))
+                joint_type = np.zeros(num_points)
+                joint_all_directions = all_direction_kmeans
+                gt_joints = np.zeros((num_parts, 7))
+                gt_proposals = np.zeros((num_parts + 1, num_points))
+                simmat = np.zeros((num_points, num_points))
+
+                for i in range(num_parts):
+                    joint_origin = joint_origins[i, :]  # / scale
+                    joint_axis = joint_axes[i, :]
+
+                    input_xyz = input_pts[:, :3]
+                    anchor_disp = input_xyz - joint_origin
+                    distance = np.linalg.norm(np.cross(anchor_disp, joint_axis), axis=1)
+                    anchor_indices = np.argsort(distance)[:30]
+
+                    rad = np.arccos(np.clip(np.dot(all_direction_kmeans, joint_axis), -1.0, 1.0))
+                    axis_class = np.argmin(rad)
+                    axis_delta = joint_axis - all_direction_kmeans[axis_class]
+                    origin_reg = anchor_disp.dot(joint_axis).reshape(-1, 1) * joint_axis - anchor_disp
+
+                    anchor_pts[anchor_indices] = 1
+                    joint_direction_cat[anchor_indices] = axis_class + 1
+                    joint_direction_reg[anchor_indices] = axis_delta
+                    joint_origin_reg[anchor_indices] = origin_reg[anchor_indices]
+                    joint_type[anchor_indices] = joint_types[i] + 1
+                    gt_joints[i] = np.concatenate((joint_origin, joint_axis, [joint_types[i] + 1]))
+                    gt_proposals[i + 1] = part_instance_masks == (i + 1)
+
+                for i in range(num_points):
+                    simmat[i] = part_instance_masks == part_instance_masks[i]
+                np.fill_diagonal(simmat, 0)
+
+                articulation_id = 0
+                instance_name = f'{key}_{articulation_id}'
+                h5output_inst = h5output.require_group(instance_name)
+                h5output_inst.attrs['numParts'] = num_parts
+                h5output_inst.attrs['fpsSample'] = fps_sample
+                h5output_inst.attrs['objectId'] = key
+                h5output_inst.create_dataset('input_pts', shape=input_pts.shape, data=input_pts.astype(np.float32),
+                                            compression='gzip')
+                h5output_inst.create_dataset('anchor_pts', shape=anchor_pts.shape, data=anchor_pts.astype(np.float32),
+                                            compression='gzip')
+                h5output_inst.create_dataset('joint_direction_cat', shape=joint_direction_cat.shape,
+                                            data=joint_direction_cat.astype(np.float32),
+                                            compression='gzip')
+                h5output_inst.create_dataset('joint_direction_reg', shape=joint_direction_reg.shape,
+                                            data=joint_direction_reg.astype(np.float32),
+                                            compression='gzip')
+                h5output_inst.create_dataset('joint_origin_reg', shape=joint_origin_reg.shape,
+                                            data=joint_origin_reg.astype(np.float32),
+                                            compression='gzip')
+                h5output_inst.create_dataset('joint_type', shape=joint_type.shape, data=joint_type.astype(np.float32),
+                                            compression='gzip')
+                h5output_inst.create_dataset('joint_all_directions', shape=joint_all_directions.shape,
+                                            data=joint_all_directions.astype(np.float32),
+                                            compression='gzip')
+                h5output_inst.create_dataset('gt_joints', shape=gt_joints.shape, data=gt_joints.astype(np.float32),
+                                            compression='gzip')
+                h5output_inst.create_dataset('gt_proposals', shape=gt_proposals.shape, data=gt_proposals.astype(np.float32),
+                                            compression='gzip')
+                h5output_inst.create_dataset('simmat', shape=simmat.shape, data=simmat.astype(np.float32),
+                                            compression='gzip')
+                if fps_sample:
+                    h5output_inst.create_dataset('point_idx', shape=point_idx.shape, data=point_idx.astype(np.int32),
+                                                compression='gzip')
+
+                if self.debug:
+                    viz = Visualizer()
+                    viz.view_stage1_input(h5output_inst)
+                
+                count += 1
+                if num_instances > 0 and count == num_instances:
+                    break
+        h5output.close()
+
+    def process_partnetsim_merged(self, input_file_path, output_file_path, num_instances=-1):
+        num_points = self.cfg.num_points
+        h5file = h5py.File(input_file_path, 'r')
+        h5output = h5py.File(output_file_path, 'w')
+        count = 0
+
+        model_data_path = "".join(input_file_path.split(".")[:-1]) + ".json"
+        with open(model_data_path, "r") as f:
+            model_data = json.load(f)
+
+        points = h5file["points"]
+        instance_ids = h5file["instance_ids"]
+        colors = h5file["colors"]
+        normals = h5file["normals"]
+        downsample_model_ids = h5file["model_ids"]
+        semantic_ids = h5file["semantic_ids"]
+        num_models = downsample_model_ids.shape[0]
+
+        model_idx_map = {}
+        model_idx_map_rev = {}
+        for i in range(num_models):
+            model_idx_map[downsample_model_ids[i].decode("utf-8")] = i
+            model_idx_map_rev[i] = downsample_model_ids[i].decode("utf-8")
+
+        for i in tqdm(range(num_models)):
+            key = model_idx_map_rev[i]
+            if key != "47443":
+                cur_points = points[i]
+                part_instance_masks = instance_ids[i]
+                cur_colors = colors[i]
+                cur_normals = normals[i]
+                part_semantic_masks = semantic_ids[i]
+                gt_data = model_data[key]
+
+                if "parts" in gt_data:
+                    num_parts = len(gt_data["parts"]) - 1
+                elif "gt_info" in gt_data:
+                    num_parts = len(gt_data["gt_info"]) - 1
+                else:
+                    num_parts = len(gt_data["part_idx_map_rev"].keys()) - 1
+
+                pts = np.column_stack((cur_points, cur_normals))
+                joint_types = np.zeros([num_parts], dtype=int)
+                joint_origins = np.zeros([num_parts, 3], dtype=float)
+                joint_axes = np.zeros([num_parts, 3], dtype=float)
+
+                if "articulations" in gt_data:
+                    no_base_gen = (part for part in gt_data["articulations"] if "fixed" not in part["type"])
+                    for i, part_info in enumerate(no_base_gen):
+                        joint_types[i] = 0 if part_info["type"] == "revolute" else 1
+                        joint_origins[i] = part_info["origin"]
+                        joint_axes[i] = part_info["axis"]
+                else:
+                    no_base_gen = ((key, value) for key, value in gt_data["gt_info"].items() if "base" not in key)
+                    for i, (part_name, part_info) in enumerate(no_base_gen):
+                        joint_types[i] = 0 if part_info["motionType"] == "revolute" else 1
+                        joint_origins[i] = part_info["motionOrigin"]
+                        joint_axes[i] = part_info["motionAxis"]
+
+                joint_axes = joint_axes / np.linalg.norm(joint_axes, axis=1).reshape(-1, 1)
+
+                fps_sample = False
+                if pts.shape[0] == num_points:
+                    input_pts = pts
+                else:
+                    fps_sample = True
+                    pcd = torch.from_numpy(pts.reshape((1, pts.shape[0], pts.shape[1])))
+                    point_idx = fps(pcd, num_points)[0].cpu().numpy()
+                    input_pts = pts[point_idx, :]
+                    part_semantic_masks = part_semantic_masks[point_idx]
+                    part_instance_masks = part_instance_masks[point_idx]
+
+                anchor_pts = np.zeros(num_points)
+                joint_direction_cat = np.zeros(num_points)
+                joint_direction_reg = np.zeros((num_points, 3))
+                joint_origin_reg = np.zeros((num_points, 3))
+                joint_type = np.zeros(num_points)
+                joint_all_directions = all_direction_kmeans
+                gt_joints = np.zeros((num_parts, 7))
+                gt_proposals = np.zeros((num_parts + 1, num_points))
+                simmat = np.zeros((num_points, num_points))
+
+                for i in range(num_parts):
+                    joint_origin = joint_origins[i, :]
+                    joint_axis = joint_axes[i, :]
+                    input_xyz = input_pts[:, :3]
+                    anchor_disp = input_xyz - joint_origin
+                    distance = np.linalg.norm(np.cross(anchor_disp, joint_axis), axis=1)
+                    anchor_indices = np.argsort(distance)[:30]
+                    rad = np.arccos(np.clip(np.dot(all_direction_kmeans, joint_axis), -1.0, 1.0))
+                    axis_class = np.argmin(rad)
+                    axis_delta = joint_axis - all_direction_kmeans[axis_class]
+                    origin_reg = anchor_disp.dot(joint_axis).reshape(-1, 1) * joint_axis - anchor_disp
+                    anchor_pts[anchor_indices] = 1
+                    joint_direction_cat[anchor_indices] = axis_class + 1
+                    joint_direction_reg[anchor_indices] = axis_delta
+                    joint_origin_reg[anchor_indices] = origin_reg[anchor_indices]
+                    joint_type[anchor_indices] = joint_types[i] + 1
+                    gt_joints[i] = np.concatenate((joint_origin, joint_axis, [joint_types[i] + 1]))
+                    gt_proposals[i + 1] = part_instance_masks == (i + 1)
+
+                for i in range(num_points):
+                    simmat[i] = part_instance_masks == part_instance_masks[i]
+                np.fill_diagonal(simmat, 0)
+
+                articulation_id = 0
+                instance_name = f'{key}_{articulation_id}'
+                h5output_inst = h5output.require_group(instance_name)
+                h5output_inst.attrs['numParts'] = num_parts
+                h5output_inst.attrs['fpsSample'] = fps_sample
+                h5output_inst.attrs['objectId'] = key
+
+                h5output_inst.create_dataset('input_pts', shape=input_pts.shape, data=input_pts.astype(np.float32), compression='gzip')
+                h5output_inst.create_dataset('anchor_pts', shape=anchor_pts.shape, data=anchor_pts.astype(np.float32), compression='gzip')
+                h5output_inst.create_dataset('joint_direction_cat', shape=joint_direction_cat.shape, data=joint_direction_cat.astype(np.float32), compression='gzip')
+                h5output_inst.create_dataset('joint_direction_reg', shape=joint_direction_reg.shape, data=joint_direction_reg.astype(np.float32), compression='gzip')
+                h5output_inst.create_dataset('joint_origin_reg', shape=joint_origin_reg.shape, data=joint_origin_reg.astype(np.float32), compression='gzip')
+                h5output_inst.create_dataset('joint_type', shape=joint_type.shape, data=joint_type.astype(np.float32), compression='gzip')
+                h5output_inst.create_dataset('joint_all_directions', shape=joint_all_directions.shape, data=joint_all_directions.astype(np.float32), compression='gzip')
+                h5output_inst.create_dataset('gt_joints', shape=gt_joints.shape, data=gt_joints.astype(np.float32), compression='gzip')
+                h5output_inst.create_dataset('gt_proposals', shape=gt_proposals.shape, data=gt_proposals.astype(np.float32), compression='gzip')
+                h5output_inst.create_dataset('simmat', shape=simmat.shape, data=simmat.astype(np.float32), compression='gzip')
+
+                if fps_sample:
+                    h5output_inst.create_dataset('point_idx', shape=point_idx.shape, data=point_idx.astype(np.int32), compression='gzip')
+
+                if self.debug:
+                    viz = Visualizer()
+                    viz.view_stage1_input(h5output_inst)
+
+                count += 1
+                if num_instances > 0 and count == num_instances:
+                    break
+
+        h5output.close()
+
+    def process_partnetsim_v3_data(self, input_file_path, output_file_path, num_instances=-1):
+        self.process_partnetsim_merged(input_file_path, output_file_path, num_instances)
