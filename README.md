@@ -13,6 +13,14 @@ Shape2Motion is an innovative approach to mobility analysis of 3D shapes. It per
 2. **Proposal Matching Module**
 3. **Mobility Optimization Network**
 
+## S2O instructions
+
+For installation and training, follow the instructions below. If you want to run inference separately, you need to modify paths in the code (indicated by print message) and uncomment the Inference segment in `pipeline.py`. Also, use `configs/network/default-inference.yaml` config (you need to adjust the placeholders to actual paths). 
+
+In order to convert predictions to [minsu3d](https://github.com/3dlg-hcvc/minsu3d) format (used in S2O for point cloud predicitons), use `convert_result_semantic.py`. Then, use `scripts/postprocess/map_predictions_from_subset_subset_points_shape2motion.py` from [S2O repo](https://github.com/3dlg-hcvc/s2o)
+
+Follow the 
+
 ## Installation
 
 The project requires Python 3+ and PyTorch 1.7+.
