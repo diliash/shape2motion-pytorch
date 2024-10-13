@@ -19,8 +19,6 @@ For installation and training, follow the instructions below. If you want to run
 
 In order to convert predictions to [minsu3d](https://github.com/3dlg-hcvc/minsu3d) format (used in S2O for point cloud predicitons), use `convert_result_semantic.py`. Then, use `scripts/postprocess/map_predictions_from_subset_subset_points_shape2motion.py` from [S2O repo](https://github.com/3dlg-hcvc/s2o)
 
-Follow the 
-
 ## Installation
 
 The project requires Python 3+ and PyTorch 1.7+.
